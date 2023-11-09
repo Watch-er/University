@@ -7,14 +7,91 @@ namespace Server
     {
         public int num1;
         public int num2;
-        public int pr;
+        //public int pr;
     }
 
     class PipeServer
     {
-        private static readonly PriorityQueue<Structure, int> dataQueue = new();
+        private static readonly PriorityQueue<Structure, int> DQueue = new();
         private static readonly Mutex mutex = new();
-        private static bool createQueueCompleted = true;
+        private static bool CQC = true;
+
+        static byte[] Serialize(Structure st)
+        {
+            int size = Unsafe.SizeOf<Structure>();
+            byte[] dataBytes = new byte[size];
+            Unsafe.As<byte, Structure>(ref dataBytes[0]) = st;
+            return dataBytes;
+        }
+
+        public static Structure Deserialize(NamedPipeServerStream pipeServer)
+        {
+            int size = Unsafe.SizeOf<Structure>();
+            byte[] bytes = new byte[size];
+            pipeServer.Read(bytes, 0, bytes.Length);
+            return Unsafe.As<byte, Structure>(ref bytes[0]);
+        }
+
+        static void CQueue()
+        {
+            Console.Write("Введите число 1: ");
+            if (!int.TryParse(Console.ReadLine(), out int _num1))
+            {
+                _num1 = 0;
+            }
+            Console.Write("Введите число 2: ");
+            if (!int.TryParse(Console.ReadLine(), out int _num2))
+            {
+                _num2 = 0;
+            }
+            //Console.Write("Введите приоритетность: ");
+            //if (!int.TryParse(Console.ReadLine(), out int _priority))
+            //{
+            //    _priority = 0;
+            //}
+            Structure data = new()
+            {
+                num1 = _num1,
+                num2 = _num2,
+            //    pr = _priority
+            };
+            mutex.WaitOne();
+            DQueue.Enqueue(data); //, _priority);
+            Console.WriteLine(DQueue.Count);
+            mutex.ReleaseMutex();
+        }
+
+        private static async Task SenderTask(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                CQC = false;
+                CQueue();
+                await Task.Delay(1000);
+            }
+            CQC = true;
+        }
+
+        private static async Task ReceiverTask(NamedPipeServerStream pipeServer)
+        {
+            while (true)
+            {
+                if (CQC)
+                {
+                    mutex.WaitOne();
+                    bool flag = DQueue.TryDequeue(out Structure st, out _);
+                    mutex.ReleaseMutex();
+                    if (flag)
+                    {
+                        byte[] dataBytes = Serialize(st);
+                        await pipeServer.WriteAsync(dataBytes);
+                        st = Deserialize(pipeServer);
+                        Console.WriteLine($"Клиент получил: num1 = {st.num1}; num2 = {st.num2}"); // приоритет = {st.pr}");
+                    }
+                }
+                await Task.Delay(1000);
+            }
+        }
 
         static async Task Main()
         {
@@ -36,83 +113,6 @@ namespace Server
             };
 
             await Task.WhenAll(SenderTask(senderToken), ReceiverTask(pipeServer));
-        }
-
-        static void CreateQueue()
-        {
-            Console.Write("Введите num1: ");
-            if (!int.TryParse(Console.ReadLine(), out int _num1))
-            {
-                _num1 = 0;
-            }
-            Console.Write("Введите num2: ");
-            if (!int.TryParse(Console.ReadLine(), out int _num2))
-            {
-                _num2 = 0;
-            }
-            Console.Write("Введите приоритетность: ");
-            if (!int.TryParse(Console.ReadLine(), out int _priority))
-            {
-                _priority = 0;
-            }
-            Structure data = new()
-            {
-                num1 = _num1,
-                num2 = _num2,
-                pr = _priority
-            };
-            mutex.WaitOne();
-            dataQueue.Enqueue(data, _priority);
-            Console.WriteLine(dataQueue.Count);
-            mutex.ReleaseMutex();
-        }
-
-        private static async Task SenderTask(CancellationToken token)
-        {
-            while (!token.IsCancellationRequested)
-            {
-                createQueueCompleted = false;
-                CreateQueue();
-                await Task.Delay(1000);
-            }
-            createQueueCompleted = true;
-        }
-
-        private static async Task ReceiverTask(NamedPipeServerStream pipeServer)
-        {
-            while (true)
-            {
-                if (createQueueCompleted)
-                {
-                    mutex.WaitOne();
-                    bool flag = dataQueue.TryDequeue(out Structure st, out _);
-                    mutex.ReleaseMutex();
-                    if (flag)
-                    {
-                        byte[] dataBytes = SerializeData(st);
-                        await pipeServer.WriteAsync(dataBytes);
-                        st = DeserializeData(pipeServer);
-                        Console.WriteLine($"Клиент получил: num1 = {st.num1}; num2 = {st.num2}; приоритет = {st.pr}");
-                    }
-                }
-                await Task.Delay(1000);
-            }
-        }
-
-        static byte[] SerializeData(Structure st)
-        {
-            int size = Unsafe.SizeOf<Structure>();
-            byte[] dataBytes = new byte[size];
-            Unsafe.As<byte, Structure>(ref dataBytes[0]) = st;
-            return dataBytes;
-        }
-
-        public static Structure DeserializeData(NamedPipeServerStream pipeServer)
-        {
-            int size = Unsafe.SizeOf<Structure>();
-            byte[] bytes = new byte[size];
-            pipeServer.Read(bytes, 0, bytes.Length);
-            return Unsafe.As<byte, Structure>(ref bytes[0]);
         }
     }
 }
